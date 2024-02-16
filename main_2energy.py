@@ -13,7 +13,7 @@ from model.energy import ConvNetwork
 from model.utils import target_function
 from model.utils.plot_utils import plot, plot_graph
 from model.bias import BiasExplicit, init_bias
-from model.sample import sample_p_d, sample_LangevinDynamics, noise, sample_base
+from model.sample import sample_p_d, sample_LangevinDynamics, noise, sample_base, sample_LangevinDynamicsFullTrajectory
 import time
 
 
@@ -25,6 +25,7 @@ import argparse
 
 def parser_default():
     parser = argparse.ArgumentParser()
+
     parser.add_argument("--annealing", default="noannealing", type=str, choices=["annealing", "cosine_annealing", "noannealing"])
     parser.add_argument("--clamp", default="", type=str, choices=["clamp", ""])
     parser.add_argument("--sn", action="store_true", help="sn")
@@ -38,10 +39,8 @@ def parser_default():
     parser.add_argument("--sigma_data", default=3e-2, type=float, help="sigma_data")
     parser.add_argument("--sigma_step", default=1e-2, type=float, help="sigma_step")
     parser.add_argument("--seed", default=1, type=int, help="seed")
-    parser.add_argument("--log_method", help="Use log for SNL or LogBound", action="store_true")
     parser.add_argument("--step_size", default=1.0, type=float, help="step_size")
-    parser.add_argument("--method_kick_in", default=0.5, type=float, help="When to switch to snl or log method")
-    parser.add_argument("--normalize_step", default=0, type=int, help="When to switch to snl or log method")
+    parser.add_argument("--log_method", help="Use log for SNL or LogBound", action="store_true")
 
     return parser
 
@@ -67,8 +66,6 @@ if __name__ == "__main__":
     step_size = args.step_size
     seed = args.seed
     log_method = args.log_method
-    method_kick_in = args.method_kick_in
-    normalize_step = args.normalize_step
 
     t.cuda.empty_cache()
     t.manual_seed(seed)
@@ -76,7 +73,7 @@ if __name__ == "__main__":
         t.cuda.manual_seed_all(seed)
 
 
-    folder = "standardenergy_{}_{}_{}_sn_{}_{}".format(annealing, clamp, K, sn, time.strftime("%Y%m%d-%H%M%S"))
+    folder = "2energy_{}_{}_{}_sn_{}_{}".format(annealing, clamp, K, sn, time.strftime("%Y%m%d-%H%M%S"))
     p = pathlib.Path(folder)
     p.mkdir(parents=True, exist_ok=True)
     logger = wandb.init(project="short_term_analysis_snl", config=vars(args), name=folder)
@@ -85,7 +82,8 @@ if __name__ == "__main__":
         device = t.device('cuda' if t.cuda.is_available() else 'cpu')
 
         # Network
-        f = ConvNetwork(n_c=n_ch, n_f=n_f, sn=sn).to(device)
+        f_sample = ConvNetwork(n_c=n_ch, n_f=n_f, sn=sn).to(device)
+        f_density = ConvNetwork(n_c=n_ch, n_f=n_f, sn=sn).to(device)
         bias = BiasExplicit().to(device)
 
         # Data
@@ -99,7 +97,8 @@ if __name__ == "__main__":
         
         # Sampling data and proposal
         noise_function = lambda x: noise(x, sigma_data=0.1)
-        current_target = lambda k, K, x : target_function(k, K, x, annealing=annealing, f=f)
+        current_target_sample = lambda k, K, x : target_function(k, K, x, annealing=annealing, f=f_sample)
+        current_target_density = lambda k, K, x : target_function(k, K, x, annealing=annealing, f=f_density,)
         current_sample_base = lambda m : sample_base(m, n_ch=n_ch, im_sz=im_sz)
 
         sample_data = lambda m: sample_p_d(m, p_d_train, noise_function=noise_function)
@@ -108,7 +107,19 @@ if __name__ == "__main__":
         sample_q = lambda K,m : sample_LangevinDynamics(
                                                     K = K,
                                                     m = m,
-                                                    target_function=current_target,
+                                                    target_function=current_target_sample,
+                                                    step_size=step_size,
+                                                    sigma_step=sigma_step,
+                                                    clamp=clamp,
+                                                    annealing=annealing,
+                                                    device=device,
+                                                    sample_base=current_sample_base,
+        )
+
+        sample_q_trajectory = lambda K,m: sample_LangevinDynamicsFullTrajectory(
+                                                    K = K,
+                                                    m = m,
+                                                    target_function=current_target_sample,
                                                     step_size=step_size,
                                                     sigma_step=sigma_step,
                                                     clamp=clamp,
@@ -117,58 +128,73 @@ if __name__ == "__main__":
                                                     sample_base=current_sample_base,
                                                     )
         
+        sample_p = lambda K,m,x_q: sample_LangevinDynamics(
+                                                    K = 1,
+                                                    m = m,
+                                                    target_function=current_target_density,
+                                                    step_size=step_size,
+                                                    sigma_step=sigma_step,
+                                                    clamp=clamp,
+                                                    annealing=annealing,
+                                                    device=device,
+                                                    sample_base=lambda m: x_q[:m],
+                                                    )
+        
         # Optim model
-        optim = t.optim.Adam(f.parameters(), lr=1e-4, betas=[.9, .999], )
+        optim_density = t.optim.Adam(f_density.parameters(), lr=1e-4, betas=[.9, .999], )
+        optim_sample = t.optim.Adam(f_sample.parameters(), lr=1e-4, betas=[.9, .999], )
         optim_bias = t.optim.SGD(bias.parameters(), lr=1e-1, momentum=0.5,)
         
 
-        bias.explicit_bias.data = init_bias(bias, f, sample_q, m, K, 100,).data
+        bias.explicit_bias.data = init_bias(bias, f_density, sample_q, m, K, 100,).data
 
         for i in tqdm.tqdm(range(n_i)):
-            if i == n_i*method_kick_in and i>0:
-                print("Switch to snl")
-                bias.explicit_bias.data = init_bias(bias, f, sample_q, m, K, 100,).data
-            f.train()
-                            
-            
-            x_p_d = sample_data(m=m)
+            x_data = sample_data(m=m)
             x_q, log_prob,dic = sample_q(K, m)  
+            
+            energy_generated = f_density(x_q)
+            energy_data = f_density(x_data)
 
-            log_z = t.logsumexp(bias(f(x_q))-log_prob-math.log(m), dim=0)
-            log_ESS =   2*t.logsumexp(bias(f(x_q))-log_prob, dim=0)- t.logsumexp(2*bias(f(x_q))-2*log_prob.detach(), dim=0)
+
+            log_z = t.logsumexp(bias(energy_generated)-log_prob.detach()-math.log(m), dim=0)
+            log_ESS =   2* t.logsumexp(bias(energy_generated)-log_prob.detach(),dim=0) - t.logsumexp(2*bias(energy_generated)-2*log_prob.detach(), dim=0)
             ESS = t.exp(log_ESS)
-            assert (ESS.item()>=0.9), "ESS is not consistent, ESS = {}, ESS_dic = {}".format(ESS.item(), dic["ESS"][-1])
+            print("current_ESS", ESS)
+            print("DIC ESS", dic["ESS"][-1],)
+            assert (ESS>=1.0), "ESS is not consistent, ESS = {}, ESS_dic = {}".format(ESS.item(), dic["ESS"][-1])
             assert (ESS.item()-dic["ESS"][-1])<1.0, "ESS is not consistent, ESS = {}, ESS_dic = {}".format(ESS.item(), dic["ESS"][-1])
-            assert (log_z.item()-dic["log_z"][-1])<1.0, "log_z is not consistent, log_z = {}, log_z_dic = {}".format(log_z.item(), dic["log_z"][-1])
-            log_likelihood = bias(f(x_p_d)).mean() - log_z
-            snl = bias(f(x_p_d)).mean() - log_z.exp() +1           
+            # assert (log_z.item()-dic["log_z"][-1])<1.0, "log_z is not consistent, log_z = {}, log_z_dic = {}".format(log_z.item(), dic["log_z"][-1])
 
-            if i< n_i*method_kick_in:
-                loss = -(f(x_p_d).mean() - f(x_q).mean()) # Likelihood f(x)= -E(x)
+
+            log_likelihood = bias(energy_data).mean() - log_z
+            snl = bias(f_density(x_data)).mean() - log_z.exp() +1
+
+            loss_f_sample = -(f_sample(x_data).mean() - f_sample(x_q).mean()) # Likelihood f(x)= -E(x)
+            if log_method :
+                loss_f_density = -log_likelihood
             else :
-                if log_method :
-                    loss = -log_likelihood
-                else :
-                    loss = -snl
+                loss_f_density = -snl
 
-            optim.zero_grad()
-            (loss).backward(retain_graph=True)
+            optim_density.zero_grad()
+            optim_sample.zero_grad()
             optim_bias.zero_grad()
-            grad_bias = -(log_z.exp() -1)
-            bias.explicit_bias.grad = grad_bias.reshape(bias.explicit_bias.shape)
-            optim_bias.step()
-            optim.step()
+            (loss_f_sample).backward(retain_graph=True)
+            (loss_f_density).backward()
+            optim_density.step()
+            optim_sample.step()
+            if not log_method:
+                optim_bias.step()
 
             if i%100 == 0:
-                f.eval()
-                log_z = init_bias(bias, f, sample_q, m, K, 10,)
+                f_density.eval()
+                log_z = init_bias(bias, f_density, sample_q, m, K, 10,)
                 total_log_likelihood = 0
                 energy_val = 0
                 nb_element = 0
                 for x_val in iter(dataloader_val):
                     x_val = x_val[0].to(device)
                     batch_size = x_val[0].shape[0]
-                    energy_val = (energy_val*nb_element + bias(f(x_val)).mean() * batch_size)/(nb_element+batch_size)
+                    energy_val = (energy_val*nb_element + bias(f_density(x_val)).mean() * batch_size)/(nb_element+batch_size)
                 log_likelihood = energy_val - log_z
                 snl = energy_val - log_z.exp() +1
                 logger.log({"val/log_likelihood": log_likelihood.item(), "val/snl": snl.item(), "val/energy": energy_val.item(), "val/log_z":log_z.item()}, step=i)
@@ -177,34 +203,37 @@ if __name__ == "__main__":
 
 
 
-            logger.log({'f(x_p_d)': f(x_p_d).mean().item(), 'f(x_q)': f(x_q).mean().item(), 'step': i}, step=i)
+        
+            logger.log({'f(x_p_d)': f_sample(x_data).mean().item(), 'f(x_q)': f_sample(x_q).mean().item(), 'step': i}, step=i)
             logger.log({
+                    'ESS': ESS.exp().item(),
                     'grad_norm_max': np.max(dic['f_prime_mean']),
                     'grad_norm_mean': np.mean(dic['f_prime_mean']),
                     'grad_norm_std': np.std(dic['f_prime_mean']),
                     'grad_norm_min':np.min(dic['f_prime_mean']),
                     'bias': bias.explicit_bias.item(),
-                    'loss': loss.item(),
+                    'loss_sample': loss_f_sample.item(),
+                    'loss_density': loss_f_density.item(),
                     'log_z': log_z.item(),
                     'log_likelihood': log_likelihood.item(),
                     'snl' : snl.item(),
                     'log_prob': log_prob.mean().item(),
-                    'ESS': ESS.item(),
                 }, step=i)
 
 
 
             if i % 50 == 0 :
-                # plot_graph(os.path.join(folder, 'normgrad_x_q_{:>06d}.png'.format(i)), dic['f_prime_mean'], dic['f_prime_std'], logger, i, name="normgrad")
-                # plot_graph(os.path.join(folder, 'epsback_{:>06d}.png'.format(i)), dic['eps_back'], dic['eps_forward'], logger, i, name="epsback")
-                # plot_graph(os.path.join(folder, 'log_acceptance_rate_{:>06d}.png'.format(i)), dic['log_acceptance_rate'], dic['log_acceptance_rate'], logger, i, name="log_acceptance_rate")
+                plot_graph(os.path.join(folder, 'normgrad_x_q_{:>06d}.png'.format(i)), dic['f_prime_mean'], dic['f_prime_std'], logger, i, name="normgrad")
+                plot_graph(os.path.join(folder, 'epsback_{:>06d}.png'.format(i)), dic['eps_back'], dic['eps_forward'], logger, i, name="epsback")
+                plot_graph(os.path.join(folder, 'log_acceptance_rate_{:>06d}.png'.format(i)), dic['log_acceptance_rate'], dic['log_acceptance_rate'], logger, i, name="log_acceptance_rate")
                 plot_graph(os.path.join(folder, 'log_z_{:>06d}.png'.format(i)), dic['log_z'], dic['log_z'], logger, i, name="log_z")
-                plot_graph(os.path.join(folder, 'ESS_{:>06d}.png'.format(i)), dic['ESS'], dic['ESS'], logger, i, name="Ess_estimate")
+                plot_graph(os.path.join(folder, 'ESS_{:>06d}.png'.format(i)), dic['ESS'], dic['ESS'], logger, i, name="ESS")
                 
             if i % 50 == 0:
-                print('{:>6d} f(x_p_d)={:>14.9f} f(x_q)={:>14.9f}'.format(i, f(x_p_d).mean(), f(x_q).mean()))
-                # plot(os.path.join(folder, 'x_q_{:>06d}.png'.format(i)), x_q, logger, i)
-                # plot(os.path.join(folder, 'x_q_{:>06d}.png'.format(i)), x_q, logger, i,name = "x_q")
+                x_p, log_prob, dic = sample_p(K, m, x_q)
+                print('{:>6d} f(x_p_d)={:>14.9f} f(x_q)={:>14.9f}'.format(i, f_sample(x_data).mean(), f_sample(x_q).mean()))
+                plot(os.path.join(folder, 'x_q_{:>06d}.png'.format(i)), x_q, logger, i,name = "x_q")
+                plot(os.path.join(folder, 'x_p_{:>06d}.png'.format(i)), x_p, logger, i, name="x_p")
 
         
         wandb.finish()
