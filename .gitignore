@@ -1,4 +1,5 @@
 *.sh
 *.png
+*.pyc
 /data
 /wandb
