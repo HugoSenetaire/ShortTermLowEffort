@@ -221,11 +221,9 @@ if __name__ == "__main__":
 
 
             if i % 50 == 0 :
-                plot_graph(os.path.join(folder, 'normgrad_x_q_{:>06d}.png'.format(i)), dic['f_prime_mean'], dic['f_prime_std'], logger, i, name="normgrad")
-                plot_graph(os.path.join(folder, 'epsback_{:>06d}.png'.format(i)), dic['eps_back'], dic['eps_forward'], logger, i, name="epsback")
-                plot_graph(os.path.join(folder, 'log_acceptance_rate_{:>06d}.png'.format(i)), dic['log_acceptance_rate'], dic['log_acceptance_rate'], logger, i, name="log_acceptance_rate")
-                plot_graph(os.path.join(folder, 'log_z_{:>06d}.png'.format(i)), dic['log_z'], dic['log_z'], logger, i, name="log_z")
-                plot_graph(os.path.join(folder, 'ESS_{:>06d}.png'.format(i)), dic['ESS'], dic['ESS'], logger, i, name="ESS")
+                for key in dic.keys():
+                    plot_graph(os.path.join(folder, '{}_{:>06d}.png'.format(key, i)), dic[key], None, logger, i, name=key)
+               
                 
             if i % 50 == 0:
                 x_p, log_prob, dic = sample_p(K, m, x_q)

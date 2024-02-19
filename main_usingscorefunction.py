@@ -237,16 +237,7 @@ if __name__ == "__main__":
             if i % 50 == 0 :
                 for key in dic.keys():
                     plot_graph(os.path.join(folder, '{}_{:>06d}.png'.format(key, i)), dic[key], None, logger, total_step, name=key)
-                # plot_graph(os.path.join(folder, 'normgrad_x_q_{:>06d}.png'.format(i)), dic['f_prime_mean'], dic['f_prime_std'], logger, total_step, name="normgrad")
-                # plot_graph(os.path.join(folder, 'epsback_{:>06d}.png'.format(i)), dic['eps_back'], dic['eps_forward'], logger, total_step, name="epsback")
-                # plot_graph(os.path.join(folder, 'epsback_no_score_{:>06d}.png'.format(i)), dic['eps_back_no_score'], dic['eps_forward'], logger, total_step, name="epsback_no_score")
-                # plot_graph(os.path.join(folder, 'log_acceptance_rate_no_score{:>06d}.png'.format(i)), dic['log_acceptance_rate_no_score'], None, logger, total_step, name="log_acceptance_rate_no_score")
-                # plot_graph(os.path.join(folder, 'log_acceptance_rate{:>06d}.png'.format(i)), dic['log_acceptance_rate'], None, logger, total_step, name="log_acceptance_rate")
-                # plot_graph(os.path.join(folder, 'ESS_{:>06d}.png'.format(i)), dic['ESS'], None, logger, total_step, name="ESS")
-                # plot_graph(os.path.join(folder, 'log_z_{:>06d}.png'.format(i)), dic['log_z'], None, logger, total_step, name="log_z")
-                # plot_graph(os.path.join(folder, 'log_z_no_score_{:>06d}.png'.format(i)), dic['log_z_no_score'], None, logger, total_step, name="log_z_no_score")
-                # plot_graph(os.path.join(folder, 'ESS_no_score_{:>06d}.png'.format(i)), dic['ESS_no_score'], None, logger, total_step, name="ESS_no_score")
-
+                    
             if i % 50 == 0:
                 print('{:>6d} f(x_p_d)={:>14.9f} f(x_q)={:>14.9f}'.format(total_step, f(x_p_d).mean(), f(x_q).mean()))
                 plot(os.path.join(folder, 'x_q_{:>06d}.png'.format(i)), x_q, logger, total_step,)
