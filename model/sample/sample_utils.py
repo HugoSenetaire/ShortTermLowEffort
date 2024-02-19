@@ -95,9 +95,6 @@ def sample_LangevinDynamicsFullTrajectory(K, m, target_function, step_size, sigm
         # Compute the acceptance probability
         log_acceptance_rate = -(target_proba+log_prob_forward - log_prob_backward -target_proba_back).logsumexp(0) - math.log(m)
 
-
-
-
         # Update the log proposal value
         log_weights = log_weights + log_prob_forward - log_prob_backward
 
@@ -263,14 +260,16 @@ def sample_LangevinDynamicsScoreControl(K, m, target_function, step_size, sigma_
     liste_ESS = []
     log_z_no_score = []
     liste_ESS_no_score = []
+    score_function_mean = []
 
     x_k = t.autograd.Variable(sample_base(m).to(device), requires_grad=True)
     log_weights = t.zeros(m, device=device, requires_grad=False)
+    log_weights_no_score = t.zeros(m, device=device, requires_grad=False)
     
     for k in range(K):
-
         # Compute the forward step
-        f_prime = t.autograd.grad(target_function(k, K, x_k,).sum(), [x_k], retain_graph=True,  create_graph=False)[0]
+        target_proba = target_function(k, K, x_k, )
+        f_prime = t.autograd.grad(target_proba.sum(), [x_k], retain_graph=True,  create_graph=False)[0]
         f_prime_norm = (f_prime.flatten(1) **2).sum(dim=1)
         epsilon = t.randn_like(x_k)
         x_kp1 = x_k.data + step_size * f_prime + math.sqrt(2*step_size) * sigma_step * epsilon
@@ -281,52 +280,66 @@ def sample_LangevinDynamicsScoreControl(K, m, target_function, step_size, sigma_
         x_kp1 = t.autograd.Variable(x_kp1, requires_grad=True)
         
         # Compute the backward step
-        target_proba = target_function(k, K, x_kp1, )
-        f_prime_new = t.autograd.grad(target_proba.sum(), [x_kp1], retain_graph=True,  create_graph=False)[0]
-        k_tensor = t.full((x_k.shape[0],), k+1).to(device)
-        x_back = x_kp1.data - step_size * f_prime_new - 2*sigma_step * score_function(x_kp1, k_tensor).detach()
-        x_back_no_score = x_kp1.data - step_size * f_prime_new
-        eps_back = (x_k.data - x_back)/math.sqrt(2*step_size)/sigma_step
+        target_proba_back = target_function(k+1, K, x_kp1, )
+        f_prime_new = t.autograd.grad(target_proba_back.sum(), [x_kp1], retain_graph=True,  create_graph=False)[0]
+        x_back_no_score = x_kp1.data - step_size * f_prime_new 
         eps_back_no_score = (x_k.data - x_back_no_score)/math.sqrt(2*step_size)/sigma_step
+
+
+
+        k_tensor = t.full((x_k.shape[0],), k+1).to(device)
+        score = score_function(x_kp1, k_tensor)
+        x_back = x_kp1.data - step_size * f_prime_new + 2*sigma_step * score.detach()
+        score_function_norm = (score.flatten(1) **2).sum(dim=1)
+        eps_back = (x_k.data - x_back)/math.sqrt(2*step_size)/sigma_step
+        
         
         # Compute the log transition probability
         log_prob_forward = t.distributions.Normal(0, 1).log_prob(epsilon).sum(dim=(1,2,3)).detach()
-        log_prob_backward = t.distributions.Normal(0, 1).log_prob(eps_back).sum(dim=(1,2,3)).detach()
         log_prob_backward_no_score = t.distributions.Normal(0, 1).log_prob(eps_back_no_score).sum(dim=(1,2,3)).detach()
+        log_prob_backward = t.distributions.Normal(0, 1).log_prob(eps_back).sum(dim=(1,2,3)).detach()
 
         # Compute the acceptance probability
-        target_proba_back = target_function(k+1, K, x_kp1, )
-        log_acceptance_rate = -(target_proba + log_prob_forward - target_proba_back - log_prob_backward).logsumexp(0) - math.log(m)
-        log_acceptance_rate_no_score = -(target_proba + log_prob_forward - target_proba_back - log_prob_backward_no_score).logsumexp(0) - math.log(m)
+        log_acceptance_rate_no_score = -(target_proba+log_prob_forward - log_prob_backward_no_score -target_proba_back).logsumexp(0) - math.log(m)
+        log_acceptance_rate = -(target_proba+log_prob_forward - log_prob_backward -target_proba_back).logsumexp(0) - math.log(m)
 
 
 
         # Update the log proposal value
+
         log_weights = log_weights + log_prob_forward - log_prob_backward
-        log_weights_no_score = log_weights + log_prob_forward - log_prob_backward_no_score
-
-        # Compute the log partition function
         current_log_z = t.logsumexp(target_proba_back - log_weights - math.log(m), dim=0)
-        current_log_z_no_score = t.logsumexp(target_proba_back -log_weights_no_score - math.log(m), dim=0)
-        current_ESS = 2*t.logsumexp(target_proba_back - log_weights, dim=0)- t.logsumexp(2*target_proba - 2*log_weights, dim=0)
-        current_ESS_no_score = 2*t.logsumexp(target_proba_back - log_weights_no_score, dim=0)- t.logsumexp(2*target_proba - 2*log_weights_no_score, dim=0)
+        current_ESS = 2*t.logsumexp(target_proba_back - log_weights, dim=0)- t.logsumexp(2*target_proba_back - 2*log_weights, dim=0)
 
-
+        log_weights_no_score = log_weights_no_score + log_prob_forward - log_prob_backward_no_score
+        current_log_z_no_score = t.logsumexp(target_proba_back - log_weights_no_score - math.log(m), dim=0)
+        current_ESS_no_score = 2*t.logsumexp(target_proba_back - log_weights_no_score, dim=0)- t.logsumexp(2*target_proba_back - 2*log_weights_no_score, dim=0)
     
-        # Logging intermediate values
-        eps_back_mean.append(eps_back.flatten(1).pow(2).sum(1).mean().item())
-        eps_forward_mean.append(epsilon.flatten(1).pow(2).sum(1).mean().item())
-        eps_back_mean_no_score.append(eps_back_no_score.flatten(1).pow(2).sum(1).mean().item())
+        # Logging intermediate values forward :
         f_prime_mean.append(f_prime_norm.mean().item())
         f_prime_std.append(f_prime_norm.std().item()) 
-        log_acceptance_rate_mean.append(log_acceptance_rate.item())
-        log_acceptance_rate_mean_no_score.append(log_acceptance_rate_no_score.item())
+        eps_forward_mean.append(epsilon.flatten(1).pow(2).sum(1).mean().item())
+
+
+        # Logging intermediate values backward and score:
+        eps_back_mean.append(eps_back.flatten(1).pow(2).sum(1).mean().item())
         log_z.append(current_log_z.item())
+        score_function_mean.append(score_function_norm.mean().item())
         liste_ESS.append(current_ESS.exp().item())
+        log_acceptance_rate_mean.append(log_acceptance_rate.item())
+
+
+        # Logging intermediate values backward no score:
+        eps_back_mean_no_score.append(eps_back_no_score.flatten(1).pow(2).sum(1).mean().item())
+        log_acceptance_rate_mean_no_score.append(log_acceptance_rate_no_score.item())
         log_z_no_score.append(current_log_z_no_score.item())
         liste_ESS_no_score.append(current_ESS_no_score.exp().item())
 
+
+        # Update the value of x_k
         x_k.data = x_kp1.data
+
+  
 
     dic = {
             "eps_back": eps_back_mean,
@@ -334,11 +347,12 @@ def sample_LangevinDynamicsScoreControl(K, m, target_function, step_size, sigma_
             "eps_forward": eps_forward_mean,
             "f_prime_mean": f_prime_mean,
             "f_prime_std": f_prime_std,
+            "score_function_mean": score_function_mean,
             "log_acceptance_rate": log_acceptance_rate_mean,
             "log_acceptance_rate_no_score": log_acceptance_rate_mean_no_score,
             "log_z": log_z,
-            "ESS": liste_ESS,
             "log_z_no_score": log_z_no_score,
+            "ESS": liste_ESS,
             "ESS_no_score": liste_ESS_no_score,
             }
     
