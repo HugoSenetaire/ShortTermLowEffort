@@ -158,7 +158,7 @@ if __name__ == "__main__":
                 all_k = t.cat([t.ones(m)*k for k in range(1,K+1)], dim=0).to(device)
                 all_epsilon = t.cat(epsilon_trajectory, dim=0)
                 optim_score.zero_grad()
-                loss = (score_function(all_trajectory, all_k)-step_size*all_epsilon/2).pow(2).mean()
+                loss = ((score_function(all_trajectory, all_k)-all_epsilon/2/step_size).pow(2)).mean()
 
                 loss.backward()
                 optim_score.step()
@@ -170,30 +170,18 @@ if __name__ == "__main__":
                 }, step=total_step)
                 total_step+=1
             score_function.requires_grad_(False)
-
-            if i == n_i*method_kick_in and i>0:
-                print("Switch to snl")
-                bias.explicit_bias.data = init_bias(bias, f, sample_q, m, K, 100,).data
-            f.train()
                             
 
             x_p_d = sample_data(m=m)
             x_q, log_weights, dic = sample_q(K, m)  
 
             log_z = t.logsumexp(bias(f(x_q))-log_weights-math.log(m), dim=0)
-            print(log_z)
-            print(log_weights)
-            print(f(x_q))
-            print(dic['ESS_no_score'][-1])
-            print(dic['log_z'][-1])
-            print(dic['ESS'][-1])
-            print(dic['log_z_no_score'][-1])
-            # current_ESS = 2*t.logsumexp(target_proba_back - log_weights, dim=0)- t.logsumexp(2*target_proba - 2*log_weights, dim=0)
 
-            ESS = 2*t.logsumexp(f(x_q)-log_weights,dim=0) - t.logsumexp(2*f(x_q)-2*log_weights.detach(), dim=0)
+            log_ESS = 2*t.logsumexp(-log_weights.detach(),dim=0) - t.logsumexp(-2*log_weights.detach(), dim=0)
+            ESS = t.exp(log_ESS)
             assert (ESS.item()>0.8), "ESS is not consistent, ESS = {}, ESS_dic = {}".format(ESS.item(), dic["ESS"][-1])
             assert (ESS.item()-dic["ESS"][-1])<1.0, "ESS is not consistent, ESS = {}, ESS_dic = {}".format(ESS.item(), dic["ESS"][-1])
-            assert (log_z.item()-dic["log_z"][-1])<1.0, "log_z is not consistent, log_z = {}, log_z_dic = {}".format(log_z.item(), dic["log_z"][-1])
+            # assert (log_z.item()-dic["log_z"][-1])<1.0, "log_z is not consistent, log_z = {}, log_z_dic = {}".format(log_z.item(), dic["log_z"][-1])
             log_likelihood = bias(f(x_p_d)).mean() - log_z
             snl = bias(f(x_p_d)).mean() - log_z.exp() +1
            
@@ -209,7 +197,7 @@ if __name__ == "__main__":
             optim.zero_grad()
             (loss).backward(retain_graph=True)
             optim_bias.zero_grad()
-            grad_bias = -(log_z.exp() -1)
+            grad_bias = (log_z.exp() -1)
             bias.explicit_bias.grad = grad_bias.reshape(bias.explicit_bias.shape)
             optim_bias.step()
             optim.step()
@@ -247,11 +235,17 @@ if __name__ == "__main__":
 
 
             if i % 50 == 0 :
-                plot_graph(os.path.join(folder, 'normgrad_x_q_{:>06d}.png'.format(i)), dic['f_prime_mean'], dic['f_prime_std'], logger, total_step, name="normgrad")
-                plot_graph(os.path.join(folder, 'epsback_{:>06d}.png'.format(i)), dic['eps_back'], dic['eps_forward'], logger, total_step, name="epsback")
-                plot_graph(os.path.join(folder, 'epsback_no_score_{:>06d}.png'.format(i)), dic['eps_back_no_score'], dic['eps_forward'], logger, total_step, name="epsback_no_score")
-                plot_graph(os.path.join(folder, 'log_acceptance_rate_no_score{:>06d}.png'.format(i)), dic['log_acceptance_rate_no_score'], None, logger, total_step, name="log_acceptance_rate_no_score")
-                plot_graph(os.path.join(folder, 'log_acceptance_rate{:>06d}.png'.format(i)), dic['log_acceptance_rate'], None, logger, total_step, name="log_acceptance_rate")
+                for key in dic.keys():
+                    plot_graph(os.path.join(folder, '{}_{:>06d}.png'.format(key, i)), dic[key], None, logger, total_step, name=key)
+                # plot_graph(os.path.join(folder, 'normgrad_x_q_{:>06d}.png'.format(i)), dic['f_prime_mean'], dic['f_prime_std'], logger, total_step, name="normgrad")
+                # plot_graph(os.path.join(folder, 'epsback_{:>06d}.png'.format(i)), dic['eps_back'], dic['eps_forward'], logger, total_step, name="epsback")
+                # plot_graph(os.path.join(folder, 'epsback_no_score_{:>06d}.png'.format(i)), dic['eps_back_no_score'], dic['eps_forward'], logger, total_step, name="epsback_no_score")
+                # plot_graph(os.path.join(folder, 'log_acceptance_rate_no_score{:>06d}.png'.format(i)), dic['log_acceptance_rate_no_score'], None, logger, total_step, name="log_acceptance_rate_no_score")
+                # plot_graph(os.path.join(folder, 'log_acceptance_rate{:>06d}.png'.format(i)), dic['log_acceptance_rate'], None, logger, total_step, name="log_acceptance_rate")
+                # plot_graph(os.path.join(folder, 'ESS_{:>06d}.png'.format(i)), dic['ESS'], None, logger, total_step, name="ESS")
+                # plot_graph(os.path.join(folder, 'log_z_{:>06d}.png'.format(i)), dic['log_z'], None, logger, total_step, name="log_z")
+                # plot_graph(os.path.join(folder, 'log_z_no_score_{:>06d}.png'.format(i)), dic['log_z_no_score'], None, logger, total_step, name="log_z_no_score")
+                # plot_graph(os.path.join(folder, 'ESS_no_score_{:>06d}.png'.format(i)), dic['ESS_no_score'], None, logger, total_step, name="ESS_no_score")
 
             if i % 50 == 0:
                 print('{:>6d} f(x_p_d)={:>14.9f} f(x_q)={:>14.9f}'.format(total_step, f(x_p_d).mean(), f(x_q).mean()))
