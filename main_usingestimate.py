@@ -127,15 +127,15 @@ if __name__ == "__main__":
         for i in tqdm.tqdm(range(n_i)):
             if i == n_i*method_kick_in and i>0:
                 print("Switch to snl")
-                bias.explicit_bias.data = init_bias(bias, f, sample_q, m, K, 100,).data
+                bias.explicit_bias.data += init_bias(bias, f, sample_q, m, K, 100,).data
             f.train()
                             
             
             x_p_d = sample_data(m=m)
-            x_q, log_prob,dic = sample_q(K, m)  
+            x_q, inv_log_weights,dic = sample_q(K, m)  
 
-            log_z = t.logsumexp(bias(f(x_q))-log_prob-math.log(m), dim=0)
-            log_ESS =   2*t.logsumexp(bias(f(x_q))-log_prob, dim=0)- t.logsumexp(2*bias(f(x_q))-2*log_prob.detach(), dim=0)
+            log_z = t.logsumexp(bias(f(x_q))-inv_log_weights-math.log(m), dim=0)
+            log_ESS =   2*t.logsumexp(bias(f(x_q))-inv_log_weights, dim=0)- t.logsumexp(2*bias(f(x_q))-2*inv_log_weights.detach(), dim=0)
             ESS = t.exp(log_ESS)
             assert (ESS.item()>=0.9), "ESS is not consistent, ESS = {}, ESS_dic = {}".format(ESS.item(), dic["ESS"][-1])
             assert (ESS.item()-dic["ESS"][-1])<1.0, "ESS is not consistent, ESS = {}, ESS_dic = {}".format(ESS.item(), dic["ESS"][-1])
@@ -150,7 +150,6 @@ if __name__ == "__main__":
                     loss = -log_likelihood
                 else :
                     loss = -snl
-
             optim.zero_grad()
             (loss).backward(retain_graph=True)
             optim_bias.zero_grad()
@@ -171,7 +170,11 @@ if __name__ == "__main__":
                     energy_val = (energy_val*nb_element + bias(f(x_val)).mean() * batch_size)/(nb_element+batch_size)
                 log_likelihood = energy_val - log_z
                 snl = energy_val - log_z.exp() +1
-                logger.log({"val/log_likelihood": log_likelihood.item(), "val/snl": snl.item(), "val/energy": energy_val.item(), "val/log_z":log_z.item()}, step=i)
+                logger.log({"val/log_likelihood": log_likelihood.item(),
+                        "val/snl": snl.item(),
+                        "val/energy": energy_val.item(),
+                        "val/log_z":log_z.item()},
+                step=i)
                     
 
 
@@ -183,12 +186,13 @@ if __name__ == "__main__":
                     'grad_norm_mean': np.mean(dic['f_prime_mean']),
                     'grad_norm_std': np.std(dic['f_prime_mean']),
                     'grad_norm_min':np.min(dic['f_prime_mean']),
-                    'bias': bias.explicit_bias.item(),
+                    'bias/bias': bias.explicit_bias.item(),
                     'loss': loss.item(),
-                    'log_z': log_z.item(),
+                    'bias/log_z': log_z.item(),
                     'log_likelihood': log_likelihood.item(),
                     'snl' : snl.item(),
-                    'log_prob': log_prob.mean().item(),
+                    'inv_log_weights': inv_log_weights.mean().item(),
+                    'bias/grad_bias': grad_bias.mean().item(),
                     'ESS': ESS.item(),
                 }, step=i)
 

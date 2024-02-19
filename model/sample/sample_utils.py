@@ -62,7 +62,7 @@ def sample_LangevinDynamicsFullTrajectory(K, m, target_function, step_size, sigm
     log_z = []
     log_acceptance_rate_mean = []
     x_k = t.autograd.Variable(sample_base(m).to(device), requires_grad=True)
-    log_weights = t.zeros(m, device=device, requires_grad=False)
+    inv_log_weights = t.zeros(m, device=device, requires_grad=False)
     trajectory = []
     epsilon_trajectory = []
     
@@ -96,7 +96,7 @@ def sample_LangevinDynamicsFullTrajectory(K, m, target_function, step_size, sigm
         log_acceptance_rate = -(target_proba+log_prob_forward - log_prob_backward -target_proba_back).logsumexp(0) - math.log(m)
 
         # Update the log proposal value
-        log_weights = log_weights + log_prob_forward - log_prob_backward
+        inv_log_weights = inv_log_weights + log_prob_forward - log_prob_backward
 
         current_log_z = t.logsumexp(target_proba_back - log_prob_forward - math.log(m), dim=0)
         current_ESS = 2*t.logsumexp(target_proba_back - log_prob_forward, dim=0)- t.logsumexp(2*target_proba_back - 2*log_prob_forward, dim=0)
@@ -156,10 +156,12 @@ def sample_LangevinDynamics(K, m, target_function, step_size, sigma_step, clamp,
     eps_back_mean = []
     eps_forward_mean = []
     log_acceptance_rate_mean = []
+    log_prob_forward_mean = []
+    log_prob_backward_mean = []
     log_z = []
     liste_ESS = []
     x_k = t.autograd.Variable(sample_base(m).to(device), requires_grad=True)
-    log_weights = t.zeros(m, device=device, requires_grad=False)
+    inv_log_weights = t.zeros(m, device=device, requires_grad=False)
     
     for k in range(K):
 
@@ -193,10 +195,10 @@ def sample_LangevinDynamics(K, m, target_function, step_size, sigma_step, clamp,
 
 
         # Update the log proposal value
-        log_weights = log_weights + log_prob_forward - log_prob_backward
+        inv_log_weights = inv_log_weights + log_prob_forward - log_prob_backward
 
-        current_log_z = t.logsumexp(target_proba_back - log_weights - math.log(m), dim=0)
-        current_ESS = 2*t.logsumexp(target_proba_back - log_weights, dim=0)- t.logsumexp(2*target_proba_back - 2*log_weights, dim=0)
+        current_log_z = t.logsumexp(target_proba_back - inv_log_weights - math.log(m), dim=0)
+        current_ESS = 2*t.logsumexp(target_proba_back - inv_log_weights, dim=0)- t.logsumexp(2*target_proba_back - 2*inv_log_weights, dim=0)
 
     
         # Logging intermediate values
@@ -207,11 +209,16 @@ def sample_LangevinDynamics(K, m, target_function, step_size, sigma_step, clamp,
         f_prime_mean.append(f_prime_norm.mean().item())
         f_prime_std.append(f_prime_norm.std().item()) 
         log_acceptance_rate_mean.append(log_acceptance_rate.item())
+        log_prob_forward_mean.append(log_prob_forward.mean().item())
+        log_prob_backward_mean.append(log_prob_backward.mean().item())
+
         x_k.data = x_kp1.data
 
     dic = {
             "eps_back": eps_back_mean,
             "eps_forward": eps_forward_mean,
+            "log_prob_forward": log_prob_forward_mean,
+            "log_prob_backward": log_prob_backward_mean,
             "f_prime_mean": f_prime_mean,
             "f_prime_std": f_prime_std,
             "log_z": log_z,
@@ -220,7 +227,7 @@ def sample_LangevinDynamics(K, m, target_function, step_size, sigma_step, clamp,
             }
     
 
-    return x_k.detach(), log_weights, dic
+    return x_k.detach(), inv_log_weights, dic
 
 
 
@@ -263,8 +270,8 @@ def sample_LangevinDynamicsScoreControl(K, m, target_function, step_size, sigma_
     score_function_mean = []
 
     x_k = t.autograd.Variable(sample_base(m).to(device), requires_grad=True)
-    log_weights = t.zeros(m, device=device, requires_grad=False)
-    log_weights_no_score = t.zeros(m, device=device, requires_grad=False)
+    inv_log_weights = t.zeros(m, device=device, requires_grad=False)
+    inv_log_weights_no_score = t.zeros(m, device=device, requires_grad=False)
     
     for k in range(K):
         # Compute the forward step
@@ -307,13 +314,13 @@ def sample_LangevinDynamicsScoreControl(K, m, target_function, step_size, sigma_
 
         # Update the log proposal value
 
-        log_weights = log_weights + log_prob_forward - log_prob_backward
-        current_log_z = t.logsumexp(target_proba_back - log_weights - math.log(m), dim=0)
-        current_ESS = 2*t.logsumexp(target_proba_back - log_weights, dim=0)- t.logsumexp(2*target_proba_back - 2*log_weights, dim=0)
+        inv_log_weights = inv_log_weights + log_prob_forward - log_prob_backward
+        current_log_z = t.logsumexp(target_proba_back - inv_log_weights - math.log(m), dim=0)
+        current_ESS = 2*t.logsumexp(target_proba_back - inv_log_weights, dim=0)- t.logsumexp(2*target_proba_back - 2*inv_log_weights, dim=0)
 
-        log_weights_no_score = log_weights_no_score + log_prob_forward - log_prob_backward_no_score
-        current_log_z_no_score = t.logsumexp(target_proba_back - log_weights_no_score - math.log(m), dim=0)
-        current_ESS_no_score = 2*t.logsumexp(target_proba_back - log_weights_no_score, dim=0)- t.logsumexp(2*target_proba_back - 2*log_weights_no_score, dim=0)
+        inv_log_weights_no_score = inv_log_weights_no_score + log_prob_forward - log_prob_backward_no_score
+        current_log_z_no_score = t.logsumexp(target_proba_back - inv_log_weights_no_score - math.log(m), dim=0)
+        current_ESS_no_score = 2*t.logsumexp(target_proba_back - inv_log_weights_no_score, dim=0)- t.logsumexp(2*target_proba_back - 2*inv_log_weights_no_score, dim=0)
     
         # Logging intermediate values forward :
         f_prime_mean.append(f_prime_norm.mean().item())
@@ -357,4 +364,4 @@ def sample_LangevinDynamicsScoreControl(K, m, target_function, step_size, sigma_
             }
     
 
-    return x_k.detach(), log_weights, dic
+    return x_k.detach(), inv_log_weights, dic

@@ -223,12 +223,13 @@ if __name__ == "__main__":
                     'grad_norm_mean': np.mean(dic['f_prime_mean']),
                     'grad_norm_std': np.std(dic['f_prime_mean']),
                     'grad_norm_min':np.min(dic['f_prime_mean']),
-                    'bias': bias.explicit_bias.item(),
+                    'bias/bias': bias.explicit_bias.item(),
                     'loss': loss.item(),
-                    'log_z': log_z.item(),
+                    'bias/log_z': log_z.item(),
                     'log_likelihood': log_likelihood.item(),
                     'snl' : snl.item(),
                     'ESS' : ESS.item(),
+                    'bias/grad_bias': grad_bias.mean().item(),
                     'log_weights': log_weights.mean().item(),
                 }, step=total_step)
             
@@ -237,7 +238,7 @@ if __name__ == "__main__":
             if i % 50 == 0 :
                 for key in dic.keys():
                     plot_graph(os.path.join(folder, '{}_{:>06d}.png'.format(key, i)), dic[key], None, logger, total_step, name=key)
-                    
+
             if i % 50 == 0:
                 print('{:>6d} f(x_p_d)={:>14.9f} f(x_q)={:>14.9f}'.format(total_step, f(x_p_d).mean(), f(x_q).mean()))
                 plot(os.path.join(folder, 'x_q_{:>06d}.png'.format(i)), x_q, logger, total_step,)

@@ -27,7 +27,7 @@ def init_bias(bias, f, sample_q, batch_size, K, nb_batch,):
     for k in tqdm.tqdm(range(nb_batch)):
 
         x_q, log_prob, dic = sample_q(K, batch_size)
-        current_log_z = t.logsumexp(f(x_q) - log_prob, dim=0)
+        current_log_z = t.logsumexp(bias(f(x_q)) - log_prob, dim=0)
         total_log_z = t.logsumexp(t.stack([total_log_z, current_log_z], dim=0), dim=0)
 
 
