@@ -159,8 +159,6 @@ if __name__ == "__main__":
             log_z = t.logsumexp(bias(energy_generated)-log_prob.detach()-math.log(m), dim=0)
             log_ESS =   2* t.logsumexp(bias(energy_generated)-log_prob.detach(),dim=0) - t.logsumexp(2*bias(energy_generated)-2*log_prob.detach(), dim=0)
             ESS = t.exp(log_ESS)
-            print("current_ESS", ESS)
-            print("DIC ESS", dic["ESS"][-1],)
             assert (ESS>=1.0), "ESS is not consistent, ESS = {}, ESS_dic = {}".format(ESS.item(), dic["ESS"][-1])
             assert (ESS.item()-dic["ESS"][-1])<1.0, "ESS is not consistent, ESS = {}, ESS_dic = {}".format(ESS.item(), dic["ESS"][-1])
             # assert (log_z.item()-dic["log_z"][-1])<1.0, "log_z is not consistent, log_z = {}, log_z_dic = {}".format(log_z.item(), dic["log_z"][-1])
