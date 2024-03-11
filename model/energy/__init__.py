@@ -1,1 +1,2 @@
 from .standard_energy import ConvNetwork
+from .concat_energy_base import ConcatEnergyBase

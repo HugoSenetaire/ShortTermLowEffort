@@ -14,22 +14,8 @@ def sample_p_d(m, p_d, noise_function=lambda x: noise(x, sigma_data=0.1),):
     p_d_i = t.LongTensor(m).random_(0, p_d.shape[0])
     return noise_function(p_d[p_d_i], ).detach()
 
-def sample_base(m, n_ch, im_sz):
-    """
-    Sample from the base distribution here a uniform only
 
-    Args:
-    -----
-    m: int
-        batch size
-    n_ch: int
-        number of channels
-    im_sz: int  
-        size of the image
-    """
-    return t.FloatTensor(m, n_ch, im_sz, im_sz).uniform_(0, 1)
-
-def sample_LangevinDynamicsFullTrajectory(K, m, target_function, step_size, sigma_step, clamp, annealing, device, sample_base=sample_base,):
+def sample_LangevinDynamicsFullTrajectory(K, m, target_function, step_size, sigma_step, clamp, annealing, device, proposal,):
     """
     Sample from the distribution q using the Langevin dynamics
 
@@ -51,7 +37,7 @@ def sample_LangevinDynamicsFullTrajectory(K, m, target_function, step_size, sigm
         type of annealing process, choices=["annealing", "cosine_annealing", "noannealing"]
     device: str
         device to use
-    sample_base: function
+    proposal: function
         function to sample from the base distribution
     """
     f_prime_mean = []
@@ -61,15 +47,17 @@ def sample_LangevinDynamicsFullTrajectory(K, m, target_function, step_size, sigm
     liste_ESS = []
     log_z = []
     log_acceptance_rate_mean = []
-    x_k = t.autograd.Variable(sample_base(m).to(device), requires_grad=True)
-    inv_log_weights = t.zeros(m, device=device, requires_grad=False)
+    
+
+    x_k, inv_log_weights, _ = proposal.sample(m)
+    x_k = t.autograd.Variable(x_k.to(device), requires_grad=True)
     trajectory = []
     epsilon_trajectory = []
     
-    for k in range(K):
+    for k in range(1, K):
         # Compute the forward step
         target_proba = target_function(k, K, x_k, )
-        f_prime = t.autograd.grad(target_function(k, K, x_k,).sum(), [x_k], retain_graph=True,  create_graph=False)[0]
+        f_prime = t.autograd.grad(target_proba.sum(), [x_k], retain_graph=True,  create_graph=False)[0]
         f_prime_norm = (f_prime.flatten(1) **2).sum(dim=1)
         epsilon = t.randn_like(x_k)
         x_kp1 = x_k.data + step_size * f_prime + math.sqrt(2*step_size) * sigma_step * epsilon
@@ -82,10 +70,10 @@ def sample_LangevinDynamicsFullTrajectory(K, m, target_function, step_size, sigm
         x_kp1 = t.autograd.Variable(x_kp1, requires_grad=True)
         
         # Compute the backward step
-        f_prime_new = t.autograd.grad(target_function(k, K, x_kp1, ).sum(), [x_kp1], retain_graph=True,  create_graph=False)[0]
+        target_proba_back = target_function(k, K, x_kp1, )
+        f_prime_new = t.autograd.grad(target_proba_back.sum(), [x_kp1], retain_graph=True,  create_graph=False)[0]
         x_back = x_kp1.data - step_size * f_prime_new 
         eps_back = (x_k.data - x_back)/math.sqrt(2*step_size)/sigma_step
-        target_proba_back = target_function(k+1, K, x_kp1, )
         
         
         # Compute the log transition probability
@@ -126,7 +114,7 @@ def sample_LangevinDynamicsFullTrajectory(K, m, target_function, step_size, sigm
     return trajectory, epsilon_trajectory, dic
 
 
-def sample_LangevinDynamics(K, m, target_function, step_size, sigma_step, clamp, annealing, device, sample_base=sample_base,):
+def sample_LangevinDynamics(K, m, target_function, step_size, sigma_step, clamp, annealing, device, proposal,):
     """
     Sample from the distribution q using the Langevin dynamics
 
@@ -142,13 +130,13 @@ def sample_LangevinDynamics(K, m, target_function, step_size, sigma_step, clamp,
         step size for the Langevin dynamics
     sigma_step: float
         standard deviation for the Langevin dynamics
-    clamp: str
+    clamp: bool
         whether to clamp the values or not
     annealing: str
         type of annealing process, choices=["annealing", "cosine_annealing", "noannealing"]
     device: str
         device to use
-    sample_base: function
+    proposal: function
         function to sample from the base distribution
     """
     f_prime_mean = []
@@ -160,28 +148,27 @@ def sample_LangevinDynamics(K, m, target_function, step_size, sigma_step, clamp,
     log_prob_backward_mean = []
     log_z = []
     liste_ESS = []
-    x_k = t.autograd.Variable(sample_base(m).to(device), requires_grad=True)
-    inv_log_weights = t.zeros(m, device=device, requires_grad=False)
     
-    for k in range(K):
-
+    x_k, inv_log_weights, _ = proposal.sample(m)
+    x_k = t.autograd.Variable(x_k.to(device), requires_grad=True)
+    for k in range(1, K+1):
         # Compute the forward step
         target_proba = target_function(k, K, x_k, )
-        f_prime = t.autograd.grad(target_function(k, K, x_k,).sum(), [x_k], retain_graph=True,  create_graph=False)[0]
+        f_prime = t.autograd.grad(target_proba.sum(), [x_k], retain_graph=False,  create_graph=False)[0]
         f_prime_norm = (f_prime.flatten(1) **2).sum(dim=1)
         epsilon = t.randn_like(x_k)
         x_kp1 = x_k.data + step_size * f_prime + math.sqrt(2*step_size) * sigma_step * epsilon
 
         # x_k.data += f_prime + sigma_step * t.randn_like(x_k)
-        if clamp == "clamp":
+        if clamp :
             x_kp1 = x_kp1.clamp(0,1)
         x_kp1 = t.autograd.Variable(x_kp1, requires_grad=True)
         
         # Compute the backward step
-        f_prime_new = t.autograd.grad(target_function(k, K, x_kp1, ).sum(), [x_kp1], retain_graph=True,  create_graph=False)[0]
+        target_proba_back = target_function(k, K, x_kp1, )
+        f_prime_new = t.autograd.grad(target_proba_back.sum(), [x_kp1], retain_graph=False, create_graph=False,)[0]
         x_back = x_kp1.data - step_size * f_prime_new 
         eps_back = (x_k.data - x_back)/math.sqrt(2*step_size)/sigma_step
-        target_proba_back = target_function(k+1, K, x_kp1, )
         
         
         # Compute the log transition probability
@@ -231,7 +218,7 @@ def sample_LangevinDynamics(K, m, target_function, step_size, sigma_step, clamp,
 
 
 
-def sample_LangevinDynamicsScoreControl(K, m, target_function, step_size, sigma_step, clamp, annealing, device, sample_base=sample_base, score_function = None):
+def sample_LangevinDynamicsScoreControl(K, m, target_function, step_size, sigma_step, clamp, annealing, device, proposal, score_function = None):
     """
     Sample from the distribution q using the Langevin dynamics
 
@@ -253,7 +240,7 @@ def sample_LangevinDynamicsScoreControl(K, m, target_function, step_size, sigma_
         type of annealing process, choices=["annealing", "cosine_annealing", "noannealing"]
     device: str
         device to use
-    sample_base: function
+    proposal: function
         function to sample from the base distribution
     """
     f_prime_mean = []
@@ -269,11 +256,10 @@ def sample_LangevinDynamicsScoreControl(K, m, target_function, step_size, sigma_
     liste_ESS_no_score = []
     score_function_mean = []
 
-    x_k = t.autograd.Variable(sample_base(m).to(device), requires_grad=True)
-    inv_log_weights = t.zeros(m, device=device, requires_grad=False)
-    inv_log_weights_no_score = t.zeros(m, device=device, requires_grad=False)
+    x_k, inv_log_weights, _ = proposal.sample(m)
+    x_k = t.autograd.Variable(x_k.to(device), requires_grad=True)
     
-    for k in range(K):
+    for k in range(1, K):
         # Compute the forward step
         target_proba = target_function(k, K, x_k, )
         f_prime = t.autograd.grad(target_proba.sum(), [x_k], retain_graph=True,  create_graph=False)[0]
